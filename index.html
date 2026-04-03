@@ -25,6 +25,8 @@ h1{font-size:21px;font-weight:700;color:#1a202c;margin-bottom:4px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle;margin-right:5px}
 @keyframes sp{to{transform:rotate(360deg)}}
 input[type=file]{display:none}
+/* Formulario oculto para POST nativo del navegador */
+#frmPost{display:none}
 </style>
 </head>
 <body>
@@ -47,12 +49,15 @@ input[type=file]{display:none}
   <button class="btn primary" id="btnOk" onclick="procesar()" disabled>🤖 Procesar con IA</button>
 </div>
 
-<script>
-// URL del Apps Script
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbybIFPkRpKUPudi2m1ZfIjjadWKFTsagsmSiL_MNe5bEtzApdNizJwuWbwr_sul5_Mz/exec";
+<!-- Formulario POST nativo — el navegador lo envía sin restricciones CORS -->
+<form id="frmPost" method="POST" action="" enctype="application/x-www-form-urlencoded">
+  <input type="hidden" id="fldImg" name="imageBase64" value="">
+  <input type="hidden" name="action" value="processBase64">
+</form>
 
+<script>
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbybIFPkRpKUPudi2m1ZfIjjadWKFTsagsmSiL_MNe5bEtzApdNizJwuWbwr_sul5_Mz/exec";
 let b64 = null;
-let b64Small = null; // versión muy pequeña para URL directa
 
 function manejarArchivo(e) {
   const f = e.target.files[0];
@@ -62,31 +67,22 @@ function manejarArchivo(e) {
   reader.onload = function(ev) {
     const img = new Image();
     img.onload = function() {
-      // Versión normal 800px para IA
-      const c1 = document.createElement('canvas');
-      const MAX = 800;
+      // Comprimir a 600px calidad 0.5 — suficiente para OCR
+      const c = document.createElement('canvas');
+      const MAX = 600;
       let w = img.width, h = img.height;
       if (w > h && w > MAX){ h = Math.round(h*MAX/w); w = MAX; }
       else if (h > MAX)    { w = Math.round(w*MAX/h); h = MAX; }
-      c1.width = w; c1.height = h;
-      c1.getContext('2d').drawImage(img, 0, 0, w, h);
-      b64 = c1.toDataURL('image/jpeg', 0.6).replace(/^data:image\/jpeg;base64,/, '');
-
-      // Versión pequeña 400px para URL directa (backup)
-      const c2 = document.createElement('canvas');
-      const MAX2 = 400;
-      let w2 = img.width, h2 = img.height;
-      if (w2 > h2 && w2 > MAX2){ h2 = Math.round(h2*MAX2/w2); w2 = MAX2; }
-      else if (h2 > MAX2)      { w2 = Math.round(w2*MAX2/h2); h2 = MAX2; }
-      c2.width = w2; c2.height = h2;
-      c2.getContext('2d').drawImage(img, 0, 0, w2, h2);
-      b64Small = c2.toDataURL('image/jpeg', 0.5).replace(/^data:image\/jpeg;base64,/, '');
-
-      document.getElementById('prev').src = c1.toDataURL('image/jpeg', 0.6);
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      const full = c.toDataURL('image/jpeg', 0.5);
+      b64 = full.replace(/^data:image\/jpeg;base64,/, '');
+      document.getElementById('prev').src = full;
       document.getElementById('prev').style.display = 'block';
       document.getElementById('ph').style.display = 'none';
       document.getElementById('btnOk').disabled = false;
-      setStatus('success', '✅ Foto lista · ' + Math.round(b64.length*0.75/1024) + ' KB · listo para procesar');
+      const kb = Math.round(b64.length * 0.75 / 1024);
+      setStatus('success', '✅ Foto lista · ' + w + 'x' + h + 'px · ' + kb + ' KB comprimida');
     };
     img.src = ev.target.result;
   };
@@ -102,57 +98,17 @@ function setStatus(cls, msg) {
   el.innerHTML = msg;
 }
 
-async function procesar() {
+function procesar() {
   if (!b64) return;
   document.getElementById('btnOk').disabled = true;
-  setStatus('loading', '<span class="spin"></span> Guardando imagen...');
+  setStatus('loading', '<span class="spin"></span> Enviando al servidor... espera ~30 seg');
 
-  const token = 'p' + Date.now();
-  const CHUNK = 40000;
-
-  // Intentar subir en chunks via fetch con no-cors
-  const chunks = [];
-  for (let i = 0; i < b64.length; i += CHUNK) chunks.push(b64.slice(i, i + CHUNK));
-  
-  let exito = false;
-  try {
-    for (let i = 0; i < chunks.length; i++) {
-      const url = SCRIPT_URL + '?action=upload' +
-        '&token=' + encodeURIComponent(token) +
-        '&chunk=' + i +
-        '&total=' + chunks.length +
-        '&data=' + encodeURIComponent(chunks[i]);
-      
-      // no-cors: no recibimos respuesta pero el request SÍ llega al servidor
-      await fetch(url, { method: 'GET', mode: 'no-cors' });
-      setStatus('loading', '<span class="spin"></span> Guardando... ' + Math.round((i+1)/chunks.length*100) + '%');
-    }
-    exito = true;
-  } catch(ex) {
-    console.log('fetch falló, intentando con imagen pequeña:', ex.message);
-  }
-
-  if (exito) {
-    setStatus('loading', '<span class="spin"></span> Analizando con IA... espera ~30 segundos');
-    // Esperar 2 seg para que todos los chunks lleguen al servidor
-    setTimeout(function() {
-      window.location.href = SCRIPT_URL + '?action=process&token=' + encodeURIComponent(token);
-    }, 2000);
-  } else {
-    // Fallback: imagen muy pequeña directo en URL
-    setStatus('loading', '<span class="spin"></span> Enviando imagen directamente...');
-    const tokenSmall = 'ps' + Date.now();
-    const chunksSmall = [];
-    for (let i = 0; i < b64Small.length; i += CHUNK) chunksSmall.push(b64Small.slice(i, i + CHUNK));
-    for (let i = 0; i < chunksSmall.length; i++) {
-      const url = SCRIPT_URL + '?action=upload&token=' + encodeURIComponent(tokenSmall) +
-        '&chunk=' + i + '&total=' + chunksSmall.length + '&data=' + encodeURIComponent(chunksSmall[i]);
-      await fetch(url, { method: 'GET', mode: 'no-cors' });
-    }
-    setTimeout(function() {
-      window.location.href = SCRIPT_URL + '?action=process&token=' + encodeURIComponent(tokenSmall);
-    }, 2000);
-  }
+  // Usar formulario POST nativo del navegador
+  // El navegador envía este formulario directamente — sin restricción CORS
+  const frm = document.getElementById('frmPost');
+  document.getElementById('fldImg').value = b64;
+  frm.action = SCRIPT_URL;
+  frm.submit();
 }
 </script>
 </body>
