@@ -12,11 +12,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 h1{font-size:21px;font-weight:700;color:#1a202c;margin-bottom:4px}
 .sub{font-size:13px;color:#718096;margin-bottom:20px}
 .preview-box{width:100%;aspect-ratio:4/3;border:2px dashed #cbd5e0;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-bottom:12px;overflow:hidden;background:#f7fafc;position:relative}
-.preview-box img{width:100%;height:100%;object-fit:cover;display:none;position:absolute;top:0;left:0}
+.preview-box img{width:100%;height:100%;object-fit:cover;display:none}
 .ph{display:flex;flex-direction:column;align-items:center;gap:8px}
 .ph span{font-size:40px}
 .ph p{font-size:13px;color:#a0aec0}
-.btn-foto{width:100%;padding:14px;border-radius:12px;font-size:15px;font-weight:600;border:none;cursor:pointer;margin-bottom:10px;background:#e2e8f0;color:#2d3748}
+.btn-foto{width:100%;padding:14px;border-radius:12px;font-size:15px;font-weight:600;border:none;cursor:pointer;margin-bottom:10px;background:#e2e8f0;color:#2d3748;display:flex;align-items:center;justify-content:center;gap:8px}
 .btn{width:100%;padding:15px;border-radius:12px;font-size:15px;font-weight:600;border:none;cursor:pointer;margin-bottom:10px;transition:all .2s}
 .primary{background:linear-gradient(135deg,#f6ad55,#ed8936);color:#fff}
 .primary:disabled{opacity:.5;cursor:not-allowed}
@@ -29,6 +29,8 @@ h1{font-size:21px;font-weight:700;color:#1a202c;margin-bottom:4px}
 .progress{width:100%;height:8px;background:#e2e8f0;border-radius:4px;margin-bottom:12px;display:none}
 .bar{height:100%;background:#ed8936;border-radius:4px;transition:width .3s;width:0}
 input[type=file]{display:none}
+/* Formulario oculto para enviar al servidor */
+#formEnvio{display:none}
 </style>
 </head>
 <body>
@@ -37,7 +39,7 @@ input[type=file]{display:none}
   <h1>Parte Diario</h1>
   <p class="sub">Tiahuanaco S.R.L.</p>
 
-  <div class="preview-box" id="previewBox">
+  <div class="preview-box">
     <img id="prev" alt="">
     <div class="ph" id="ph">
       <span>📄</span>
@@ -45,7 +47,6 @@ input[type=file]{display:none}
     </div>
   </div>
 
-  <!-- Botones nativos para cámara y galería -->
   <button class="btn-foto" onclick="document.getElementById('inputCamara').click()">
     📷 Tomar foto con cámara
   </button>
@@ -64,37 +65,39 @@ input[type=file]{display:none}
   </button>
 </div>
 
+<!-- Formulario oculto que se envía al servidor via GET con la imagen -->
+<form id="formEnvio" method="GET" target="_self">
+  <input type="hidden" name="action" value="process">
+  <input type="hidden" id="inputToken" name="token" value="">
+</form>
+
 <script>
-// ⚠️ REEMPLAZA ESTA URL CON LA TUYA DE APPS SCRIPT
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbybIFPkRpKUPudi2m1ZfIjjadWKFTsagsmSiL_MNe5bEtzApdNizJwuWbwr_sul5_Mz/exec";
-const CHUNK_SIZE = 40000;
+const CHUNK = 40000;
 let b64 = null;
 
 function manejarArchivo(e) {
   const f = e.target.files[0];
   if (!f) return;
   setStatus('loading', '<span class="spin"></span> Preparando: ' + f.name + ' (' + Math.round(f.size/1024) + ' KB)');
-
   const reader = new FileReader();
   reader.onload = function(ev) {
     const img = new Image();
     img.onload = function() {
-      const canvas = document.createElement('canvas');
+      const c = document.createElement('canvas');
       const MAX = 1000;
       let w = img.width, h = img.height;
-      if (w > h && w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
-      else if (h > MAX)     { w = Math.round(w * MAX / h); h = MAX; }
-      canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-
-      const full = canvas.toDataURL('image/jpeg', 0.75);
+      if (w > h && w > MAX){ h = Math.round(h*MAX/w); w = MAX; }
+      else if (h > MAX)    { w = Math.round(w*MAX/h); h = MAX; }
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      const full = c.toDataURL('image/jpeg', 0.75);
       b64 = full.replace(/^data:image\/jpeg;base64,/, '');
-
       document.getElementById('prev').src = full;
       document.getElementById('prev').style.display = 'block';
       document.getElementById('ph').style.display = 'none';
       document.getElementById('btnOk').disabled = false;
-      setStatus('success', '✅ Foto lista (' + w + 'x' + h + 'px · ' + Math.round(b64.length * 0.75 / 1024) + ' KB comprimida)');
+      setStatus('success', '✅ Foto lista (' + w + 'x' + h + 'px · ' + Math.round(b64.length*0.75/1024) + ' KB)');
     };
     img.src = ev.target.result;
   };
@@ -115,46 +118,64 @@ function setProgress(pct) {
   document.getElementById('bar').style.width = pct + '%';
 }
 
+// Envía la imagen en chunks usando iframes ocultos (evita CORS)
 async function procesar() {
   if (!b64) return;
   document.getElementById('btnOk').disabled = true;
 
   const chunks = [];
-  for (let i = 0; i < b64.length; i += CHUNK_SIZE) {
-    chunks.push(b64.slice(i, i + CHUNK_SIZE));
-  }
+  for (let i = 0; i < b64.length; i += CHUNK) chunks.push(b64.slice(i, i + CHUNK));
   const total = chunks.length;
   const token = 'p' + Date.now();
 
-  setStatus('loading', '<span class="spin"></span> Subiendo imagen (0/' + total + ')...');
+  setStatus('loading', '<span class="spin"></span> Preparando envío (' + total + ' partes)...');
   setProgress(0);
 
+  // Subir cada chunk via iframe (no tiene restricción CORS)
   for (let i = 0; i < total; i++) {
-    const url = SCRIPT_URL + '?action=upload&token=' + encodeURIComponent(token) +
-      '&chunk=' + i + '&total=' + total + '&data=' + encodeURIComponent(chunks[i]);
-    try {
-      const r = await fetch(url);
-      const txt = await r.text();
-      const s = txt.indexOf('{'), e2 = txt.lastIndexOf('}');
-      if (s > -1) {
-        const d = JSON.parse(txt.substring(s, e2 + 1));
-        if (!d.success) throw new Error(d.error || 'Error en chunk ' + i);
-      }
-    } catch(ex) {
-      setStatus('error', '❌ Error subiendo: ' + ex.message);
-      document.getElementById('btnOk').disabled = false;
-      document.getElementById('prog').style.display = 'none';
-      return;
-    }
+    await subirChunkIframe(SCRIPT_URL, token, i, total, chunks[i]);
     setProgress(Math.round((i + 1) / total * 80));
-    setStatus('loading', '<span class="spin"></span> Subiendo imagen (' + (i+1) + '/' + total + ')...');
+    setStatus('loading', '<span class="spin"></span> Enviando parte ' + (i+1) + ' de ' + total + '...');
   }
 
-  setStatus('loading', '<span class="spin"></span> Analizando con IA... espera ~30 seg');
+  setStatus('loading', '<span class="spin"></span> Analizando con IA... espera ~30 segundos');
   setProgress(90);
 
   // Redirigir al servidor para procesar
-  window.location.href = SCRIPT_URL + '?action=process&token=' + encodeURIComponent(token);
+  setTimeout(function() {
+    window.location.href = SCRIPT_URL + '?action=process&token=' + encodeURIComponent(token);
+  }, 500);
+}
+
+function subirChunkIframe(scriptUrl, token, chunk, total, data) {
+  return new Promise(function(resolve) {
+    const url = scriptUrl + '?action=upload' +
+      '&token=' + encodeURIComponent(token) +
+      '&chunk=' + chunk +
+      '&total=' + total +
+      '&data=' + encodeURIComponent(data);
+
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = url;
+    iframe.onload = function() {
+      document.body.removeChild(iframe);
+      resolve();
+    };
+    iframe.onerror = function() {
+      document.body.removeChild(iframe);
+      resolve(); // continuar aunque falle
+    };
+    document.body.appendChild(iframe);
+
+    // Timeout por si el iframe no carga
+    setTimeout(function() {
+      if (document.body.contains(iframe)) {
+        document.body.removeChild(iframe);
+      }
+      resolve();
+    }, 10000);
+  });
 }
 </script>
 </body>
